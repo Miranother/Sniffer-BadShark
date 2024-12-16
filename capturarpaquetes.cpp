@@ -13,7 +13,8 @@
 #include <QLabel>
 #include <QDateTime>
 #include <ws2tcpip.h>
-#include "v1.h"
+#include "v1.h"  // Para la estructura ip (puede no estar disponible en Windows)
+
 
 #include <QTextEdit>
 #pragma comment(lib, "ws2_32.lib") // Necesario para funciones de red en Windows
@@ -45,15 +46,22 @@ struct ether_header {
 };
 
 struct tcphdr {
-    u_short th_sport;   // Puerto de origen
-    u_short th_dport;   // Puerto de destino
-    u_int th_seq;       // Número de secuencia
-    u_int th_ack;       // Número de acuse de recibo
-    u_char th_offx2;    // Desplazamiento de datos
-    u_char th_flags;     // Flags TCP
-    u_short th_win;     // Tamaño de ventana
-    u_short th_sum;     // Checksum
-    u_short th_urp;     // Puntero urgente
+    unsigned short th_sport; // Puerto de origen
+    unsigned short th_dport; // Puerto de destino
+    unsigned int th_seq;     // Secuencia
+    unsigned int th_ack;     // Acuse de recibo
+    unsigned char th_off:4;  // Longitud del encabezado
+    unsigned char th_flags:4; // Flags
+    unsigned short th_win;    // Ventana
+    unsigned short th_sum;    // Suma de verificación
+    unsigned short th_urp;    // Puerto urgente
+};
+
+struct udphdr {
+    unsigned short uh_sport; // Puerto de origen
+    unsigned short uh_dport; // Puerto de destino
+    unsigned short uh_ulen;   // Longitud
+    unsigned short uh_sum;    // Suma de verificación
 };
 // Función para convertir dirección MAC a cadena
 void ether_ntoa(const u_char *mac, char *buffer) {
@@ -77,8 +85,8 @@ capturarpaquetes::capturarpaquetes(QWidget *parent)
     setFixedSize(1080, 720);
     setWindowIcon(QIcon("./BadShark.png"));
     // Configurar el QTableWidget
-    tableWidget->setColumnCount(5);
-    tableWidget->setHorizontalHeaderLabels({"Tiempo", "IP Fuente", "IP Destino", "Protocolo", "Tamaño"});
+    tableWidget->setColumnCount(6);
+    tableWidget->setHorizontalHeaderLabels({"Tiempo", "IP Fuente", "IP Destino", "Protocolo", "Tamaño","Info"});
     tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
     tableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableWidget->horizontalHeader()->setStretchLastSection(true);
@@ -351,16 +359,41 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
     // Convertir direcciones IP
     QString source = QString::fromLatin1(inet_ntoa(ipHeader->ip_src));
     QString destination = QString::fromLatin1(inet_ntoa(ipHeader->ip_dst));
-
+    // Resolver el nombre del dispositivo de origen
+    QString sourceDeviceName = resolverNombreDispositivo(source);
     // Determinar el protocolo
     QString protocol;
     switch (ipHeader->ip_p) {
-    case IPPROTO_TCP:
-        protocol = "TCP";
+    case IPPROTO_TCP: {
+        // Obtener el encabezado TCP
+        const struct tcphdr *tcpHeader = (struct tcphdr *)(packet + sizeof(struct ether_header) + ipHeader->ip_hl * 4);
+        // Verificar si es TLSv1.3
+        if (ntohs(tcpHeader->th_dport) == 443 || ntohs(tcpHeader->th_sport) == 443) {
+            protocol = "TLSv1.3";
+        } else {
+            protocol = "TCP";
+        }
         break;
-    case IPPROTO_UDP:
-        protocol = "UDP";
+    }
+    case IPPROTO_UDP: {
+        // Obtener el encabezado UDP
+        const struct udphdr *udpHeader = (struct udphdr *)(packet + sizeof(struct ether_header) + ipHeader->ip_hl * 4);
+        // Verificar si es mDNS
+        if (ntohs(udpHeader->uh_dport) == 5353 || ntohs(udpHeader->uh_sport) == 5353) {
+            protocol = "mDNS";
+        }
+        // Verificar si es SSDP
+        else if (ntohs(udpHeader->uh_dport) == 1900 || ntohs(udpHeader->uh_sport) == 1900) {
+            protocol = "SSDP";
+        }
+        // Verificar si es QUIC
+        else if (ntohs(udpHeader->uh_dport) == 443 || ntohs(udpHeader->uh_sport) == 443) {
+            protocol = "QUIC";
+        } else {
+            protocol = "UDP";
+        }
         break;
+    }
     case IPPROTO_ICMP:
         protocol = "ICMP";
         break;
@@ -368,6 +401,7 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
         protocol = "Otro";
         break;
     }
+
 
     // Obtener el tamaño del paquete
     int packetSize = header->len;
@@ -377,6 +411,8 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
     paquete.frameNumber = tableWidget->rowCount() + 1; // Número de frame
     paquete.frameLength = packetSize; // Longitud del frame
     paquete.interfaceName = deviceName; // Cambia esto según tu lógica
+    paquete.sourceDeviceName = sourceDeviceName; // Almacenar el nombre del dispositivo de origen
+
     // Calcular el tiempo transcurrido desde el inicio de la captura
     int elapsedMilliseconds = startTime.msecsTo(QTime::currentTime());
     int elapsedSeconds = elapsedMilliseconds / 1000; // Convertir a segundos
@@ -438,13 +474,12 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
     }
 
     // Agregar el paquete a la tabla
-    agregarPaqueteATabla(header->ts, source, destination, protocol, packetSize,paquete.elapsedTime);
+    agregarPaqueteATabla(header->ts, source, destination, protocol, packetSize,paquete.elapsedTime,paquete.sourceDeviceName);
     // Agregar el paquete a la lista de paquetes capturados
     paquetesCapturados.append(paquete);
 }
 // Agregar un paquete a la tabla
-void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, const QString &source, const QString &destination, const QString &protocol, int size,const QString &elapsedTime)
-{
+void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, const QString &source, const QString &destination, const QString &protocol, int size, const QString &elapsedTime, const QString &sourceDeviceName) {
     // Convertir el tiempo a un formato legible
     QString timeString = QString("%1.%2").arg(timestamp.tv_sec).arg(timestamp.tv_usec, 6, 10, QChar('0'));
 
@@ -458,6 +493,7 @@ void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, con
     QTableWidgetItem *destinationItem = new QTableWidgetItem(destination);
     QTableWidgetItem *protocolItem = new QTableWidgetItem(protocol);
     QTableWidgetItem *sizeItem = new QTableWidgetItem(QString::number(size));
+    QTableWidgetItem *deviceItem = new QTableWidgetItem(sourceDeviceName); // Nuevo elemento para el nombre del dispositivo
 
     // Determinar el color de fondo opaco basado en el protocolo
     QColor backgroundColor;
@@ -467,22 +503,31 @@ void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, con
         backgroundColor = QColor(144, 238, 144, 100); // Verde claro opaco
     } else if (protocol == "ICMP") {
         backgroundColor = QColor(255, 255, 102, 100); // Amarillo claro opaco
+    } else if (protocol == "TLSv1.3") {
+        backgroundColor = QColor(0, 204, 204, 100); // Azul oscuro opaco
+    } else if (protocol == "mDNS") {
+        backgroundColor = QColor(255, 165, 0, 100); // Naranja opaco
+    } else if (protocol == "SSDP") {
+        backgroundColor = QColor(255, 192, 203, 100); // Rosa opaco
+    } else if (protocol == "QUIC") {
+        backgroundColor = QColor(230, 230, 250, 100); // Violeta opaco
     } else {
         backgroundColor = QColor(211, 211, 211, 100); // Gris claro opaco para otros
     }
-
     // Aplicar el color de fondo y mantener texto oscuro
     timeItem->setBackground(backgroundColor);
     sourceItem->setBackground(backgroundColor);
     destinationItem->setBackground(backgroundColor);
     protocolItem->setBackground(backgroundColor);
     sizeItem->setBackground(backgroundColor);
+    deviceItem->setBackground(backgroundColor); // Color de fondo para el nombre del dispositivo
 
     timeItem->setForeground(Qt::black);
     sourceItem->setForeground(Qt::black);
     destinationItem->setForeground(Qt::black);
     protocolItem->setForeground(Qt::black);
     sizeItem->setForeground(Qt::black);
+    deviceItem->setForeground(Qt::black); // Texto normal para el nombre del dispositivo
 
     // Agregar los elementos a la tabla
     tableWidget->setItem(rowCount, 0, timeItem);
@@ -490,8 +535,8 @@ void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, con
     tableWidget->setItem(rowCount, 2, destinationItem);
     tableWidget->setItem(rowCount, 3, protocolItem);
     tableWidget->setItem(rowCount, 4, sizeItem);
+    tableWidget->setItem(rowCount, 5, deviceItem); // Agregar el nombre del dispositivo a la tabla
 }
-
 void capturarpaquetes::actualizarSeleccion()
 {
     // Iterar sobre todas las filas
@@ -515,45 +560,6 @@ void capturarpaquetes::actualizarSeleccion()
 
 
 
-// Procesar el filtro ingresado por el usuario
-bool capturarpaquetes::procesarFiltroUsuario(const u_char *packet, const QString &filtro)
-{
-    const struct ip *ipHeader = (struct ip *)(packet + 14); // Salta el encabezado Ethernet
-
-    // Convertir direcciones IP
-    QString source = QString::fromLatin1(inet_ntoa(ipHeader->ip_src));
-    QString destination = QString::fromLatin1(inet_ntoa(ipHeader->ip_dst));
-
-    // Determinar el protocolo
-    QString protocol;
-    switch (ipHeader->ip_p) {
-    case IPPROTO_TCP:
-        protocol = "TCP";
-        break;
-    case IPPROTO_UDP:
-        protocol = "UDP";
-        break;
-    case IPPROTO_ICMP:
-        protocol = "ICMP";
-        break;
-    default:
-        protocol = "Otro";
-        break;
-    }
-
-    // Verificar si el paquete coincide con el filtro
-    if (filtro.toLower().contains("icmp") && protocol == "ICMP") {
-        return true;
-    } else if (filtro.toLower().contains("udp") && protocol == "UDP") {
-        return true;
-    } else if (filtro.toLower().contains("tcp") && protocol == "TCP") {
-        return true;
-    } else if (filtro.toLower().contains("host:") && (source.contains(filtro.mid(5).trimmed()) || destination.contains(filtro.mid(5).trimmed()))) {
-        return true;
-    }
-
-    return false;
-}
 
 void capturarpaquetes::actualizarFiltro()
 {
@@ -592,7 +598,13 @@ void capturarpaquetes::procesarFiltro()
         }
 
         // Validar el texto ingresado
-        if (textoFiltro.toLower().contains("icmp") || textoFiltro.toLower().contains("udp") || textoFiltro.toLower().contains("tcp")) {
+        if      (textoFiltro.toLower().contains("icmp") ||
+                textoFiltro.toLower().contains("udp") ||
+                textoFiltro.toLower().contains("tcp") ||
+                textoFiltro.toLower().contains("tlsv1.3") ||
+                textoFiltro.toLower().contains("mdns") ||
+                textoFiltro.toLower().contains("ssdp") ||
+                textoFiltro.toLower().contains("quic")) {
             // Guardar el texto valido en el archivo
             QFile file("./filtro.txt");
             if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -632,7 +644,7 @@ void capturarpaquetes::procesarFiltro()
                 lineEditFiltro->clear(); // Limpiar el QLineEdit
             }
         } else {
-            QMessageBox::warning(this, "Filtro no valido", "El filtro ingresado no es valido. Por favor, ingrese un filtro que contenga ICMP, UDP, TCP o host:");
+            QMessageBox::warning(this, "Filtro no valido", "El filtro ingresado no es valido. Por favor, ingrese un filtro que contenga ICMP, UDP, TCP o host: (dominio), TLSV1.3,MDNS,SSDP,QUIC,none(quitar filtro)");
             lineEditFiltro->clear(); // Limpiar el QLineEdit
             return;
         }
@@ -691,6 +703,7 @@ void capturarpaquetes::guardarPaqueteEnArchivo(const Paquete &paquete)
         out << "Número de frame: " << paquete.frameNumber << "\n";
         out << "Longitud del frame: " << paquete.frameLength << "\n";
         out << "Nombre de la interfaz: " << paquete.interfaceName << "\n";
+        out << "De donde proviene el paquete: " << paquete.sourceDeviceName << "\n";
         out << "Hora de llegada: " << paquete.arrivalTime << "\n";
         out << "Hora de llegada en formato epoch: " << paquete.epochArrivalTime << "\n";
         out << "Tipo de encapsulación: " << paquete.encapsulationType << "\n";
@@ -796,7 +809,7 @@ void capturarpaquetes::guardarPaquetesEnCSV() {
         QTextStream out(&file);
 
         // Escribir encabezados
-        out << "Paquete,Tiempo,IP Fuente,IP Destino,Protocolo,Tamaño\n";
+        out << "Paquete,Tiempo,IP Fuente,IP Destino,Protocolo,Tam,Info\n";
 
         // Escribir cada paquete capturado
         for (const Paquete &paquete : paquetesCapturados) {
@@ -806,7 +819,8 @@ void capturarpaquetes::guardarPaquetesEnCSV() {
                 << paquete.srcIP << ","       // IP Fuente
                 << paquete.dstIP << ","       // IP Destino
                 << paquete.protocol << ","     // Protocolo
-                << paquete.frameLength << "\n"; // Tamaño
+                << paquete.frameLength << "," // Tamaño
+                << paquete.sourceDeviceName <<"\n";
         }
 
         file.close();
@@ -851,3 +865,30 @@ void capturarpaquetes::guardarPaquetesEnCSV() {
     }
 }
 
+
+
+QString capturarpaquetes::resolverNombreDispositivo(const QString &ip) {
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return QString("Error al inicializar Winsock");
+    }
+
+    struct sockaddr_in sa;
+    sa.sin_family = AF_INET;
+
+    // Convertir la dirección IP de QString a in_addr
+    if (inet_pton(AF_INET, ip.toStdString().c_str(), &sa.sin_addr) <= 0) {
+        WSACleanup();
+        return QString("Dirección IP no válida");
+    }
+
+    // Usar gethostbyaddr para obtener el nombre del host
+    struct hostent *he = gethostbyaddr((const char *)&sa.sin_addr, sizeof(sa.sin_addr), AF_INET);
+    if (he != nullptr) {
+        WSACleanup(); // Limpiar Winsock
+        return QString::fromLatin1(he->h_name); // Devuelve el nombre del host
+    }
+
+    WSACleanup(); // Limpiar Winsock
+    return QString("Desconocido"); // Si no se pudo resolver, devuelve "Desconocido"
+}

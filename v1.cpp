@@ -27,6 +27,7 @@ v1::v1(QWidget *parent)
 
     cargarFuente();
     obtenerDispositivosDeRed();
+     limpiarFiltro();
 }
 
 v1::~v1()
@@ -247,7 +248,13 @@ void v1::filtrarTexto()
         }
 
         // Validar el texto ingresado para ICMP, UDP, TCP
-        if (textoFiltro.toLower().contains("icmp") || textoFiltro.toLower().contains("udp") || textoFiltro.toLower().contains("tcp")) {
+        if (textoFiltro.toLower().contains("icmp") ||
+            textoFiltro.toLower().contains("udp") ||
+            textoFiltro.toLower().contains("tcp") ||
+            textoFiltro.toLower().contains("tlsv1.3") ||
+            textoFiltro.toLower().contains("mdns") ||
+            textoFiltro.toLower().contains("ssdp") ||
+            textoFiltro.toLower().contains("quic")) {
             // Guardar el texto válido en el archivo
             QFile file("./filtro.txt");
             if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -281,8 +288,8 @@ void v1::filtrarTexto()
                 lineEditFiltro->clear(); // Limpiar el QLineEdit
             }
         } else {
-            QMessageBox::warning(this, "Filtro no válido", "El filtro ingresado no es válido. Por favor, ingrese un filtro que contenga ICMP, UDP, TCP o host:");
-            lineEditFiltro->clear(); // Limpiar el QLineEdit
+            QMessageBox::warning(this, "Filtro no valido", "El filtro ingresado no es valido. Por favor, ingrese un filtro que contenga ICMP, UDP, TCP o host: (dominio), TLSV1.3,MDNS,SSDP,QUIC,none(quitar filtro)");
+           lineEditFiltro->clear(); // Limpiar el QLineEdit
         }
     }
 }
@@ -318,4 +325,17 @@ QString v1::resolverDominio(const QString &dominio) {
     struct in_addr addr;
     memcpy(&addr, he->h_addr_list[0], sizeof(struct in_addr));
     return QString(inet_ntoa(addr)); // Devuelve la dirección IP como QString
+}
+
+
+void v1::limpiarFiltro()
+{
+    QFile file("./filtro.txt");
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        file.resize(0); // Limpiar el contenido del archivo
+        file.close();
+        qDebug() << "Filtros eliminados de filtro.txt";
+    } else {
+        qDebug() << "Error al abrir el archivo para limpiar el filtro.";
+    }
 }

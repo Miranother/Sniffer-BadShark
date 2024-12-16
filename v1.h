@@ -42,7 +42,7 @@ private:
     void reiniciarInterfaz();
     void limpiarPestania();
     void filtrarTexto();
-
+    void limpiarFiltro();
     bool validarDominio(const QString &dominio);
     QString resolverDominio(const QString &dominio);
 signals:

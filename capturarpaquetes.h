@@ -57,6 +57,7 @@ struct Paquete {
     // Información de la carga útil
     QString payloadLength; // Longitud de la carga útil
     QString payloadData; // Datos de la carga útil
+    QString sourceDeviceName; //Nombre del dispositivo
 };
 namespace Ui {
 class capturarpaquetes;
@@ -92,7 +93,7 @@ private:
     bool procesarFiltroArchivo(const u_char *packet, const QString &filtro);
     bool procesarFiltroUsuario(const u_char *packet, const QString &filtro);
     void actualizarFiltro();
-    void agregarPaqueteATabla(const struct timeval &timestamp, const QString &source, const QString &destination, const QString &protocol, int size,const QString &elapsedTime);
+    void agregarPaqueteATabla(const struct timeval &timestamp, const QString &source, const QString &destination, const QString &protocol, int size, const QString &elapsedTime, const QString &sourceDeviceName);
     void procesarFiltro();
     void filtrarHost(const QString &host);
     bool validarDominio(const QString &dominio);
@@ -105,6 +106,7 @@ private:
     void guardarPaquetesEnCSV();
     void actualizarSeleccion();
     void guardarPaquetesEnXLSX();
+    QString resolverNombreDispositivo(const QString &ip);
 };
 
 #endif // CAPTURARPAQUETES_H
