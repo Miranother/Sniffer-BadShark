@@ -659,40 +659,43 @@ void capturarpaquetes::procesarFiltro()
     });
     captura.detach();
 }
-
-bool capturarpaquetes::validarDominio(const QString &dominio)
-{
-    WSADATA wsaData;
-    int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-    if (iResult != 0) {
-        QMessageBox::critical(this, "Error", "No se pudo inicializar Winsock.");
-        return false;
-    }
-    struct hostent *he = gethostbyname(dominio.toStdString().c_str());
-    WSACleanup();
-    return he != NULL;
-}
-
 QString capturarpaquetes::resolverDominio(const QString &dominio) {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        return QString(); // Error al inicializar Winsock
+        return QString("Error al inicializar Winsock");
     }
 
-    struct hostent *he = gethostbyname(dominio.toStdString().c_str());
-    WSACleanup();
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; // IPv4
+    hints.ai_socktype = SOCK_STREAM; // TCP
 
-    if (he == nullptr) {
-        return QString(); // No se pudo resolver el dominio
+    // Llamar a getaddrinfo
+    int status = getaddrinfo(dominio.toStdString().c_str(), NULL, &hints, &res);
+    if (status != 0) {
+        WSACleanup(); // Limpiar Winsock
+        return QString("Error al resolver el dominio: ") + QString(gai_strerror(status));
     }
 
     // Convertir la dirección IP a un QString
-    struct in_addr addr;
-    memcpy(&addr, he->h_addr_list[0], sizeof(struct in_addr));
-    return QString(inet_ntoa(addr)); // Devuelve la dirección IP como QString
+    char ipstr[INET_ADDRSTRLEN];
+    QString lastIpAddress; // Para almacenar la última dirección IP encontrada
+
+    for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
+        void *addr = &((struct sockaddr_in *)p->ai_addr)->sin_addr;
+        inet_ntop(p->ai_family, addr, ipstr, sizeof(ipstr));
+        lastIpAddress = QString(ipstr); // Actualizar con la última dirección IP
+    }
+
+    freeaddrinfo(res); // Liberar la memoria
+    WSACleanup(); // Limpiar Winsock
+
+    if (lastIpAddress.isEmpty()) {
+        return QString("No se pudo resolver el dominio");
+    }
+
+    return lastIpAddress; // Devuelve la última dirección IP como QString
 }
-
-
 void capturarpaquetes::guardarPaqueteEnArchivo(const Paquete &paquete)
 {
     QFile file("paquete_actual.txt"); // Cambia el nombre del archivo si es necesario
