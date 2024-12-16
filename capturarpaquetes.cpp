@@ -230,84 +230,95 @@ void capturarpaquetes::togglePause()
 }
 
 // Iniciar la captura de paquetes
-void capturarpaquetes::iniciarCaptura(const QString &deviceName)
-{
+void capturarpaquetes::iniciarCaptura(const QString &deviceName) {
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle;
 
     // Abrir el dispositivo para captura
-    handle = pcap_open_live(deviceName.toStdString().c_str(), BUFSIZ, 1, 1000, errbuf);
+    handle = pcap_open_live(deviceName.toStdString().c_str(), 1048576, 1, 10, errbuf); // 1 MB
     if (handle == nullptr) {
         qDebug() << "Error al abrir el dispositivo:" << errbuf;
         return;
     }
-    // Solo establecer startTime si es la primera vez que se inicia la captura
-    if (startTime.isNull()) {
-        startTime = QTime::currentTime();
-    }
+
     startTime = QTime::currentTime();
     qDebug() << "Capturando paquetes en el dispositivo:" << deviceName;
-
-    // Leer el filtro del archivo de texto
-    QString filtroArchivo;
-    QFile file("./filtro.txt");
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&file);
-
-        filtroArchivo = in.readAll();
-        file.close();
-    }
 
     struct pcap_pkthdr *header;
     const u_char *packet;
     int res;
 
+    // Hilo para procesar paquetes
+    std::thread processingThread(procesarPaquetes);
+
+    // Leer el filtro del archivo de texto al inicio
+    QString filtroArchivo;
+    QFile file("./filtro.txt");
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&file);
+        filtroArchivo = in.readAll();
+        file.close();
+    }
+
+    // Establecer el filtro inicial si existe
+    struct bpf_program fp;
+    if (!filtroArchivo.isEmpty()) {
+        if (pcap_compile(handle, &fp, filtroArchivo.toStdString().c_str(), 0, PCAP_NETMASK_UNKNOWN) == -1) {
+            qDebug() << "Error al compilar el filtro:" << pcap_geterr(handle);
+            pcap_close(handle);
+            return;
+        }
+        if (pcap_setfilter(handle, &fp) == -1) {
+            qDebug() << "Error al establecer el filtro:" << pcap_geterr(handle);
+            pcap_close(handle);
+            return;
+        }
+    }
+
     // Captura en bucle
     while ((res = pcap_next_ex(handle, &header, &packet)) >= 0) {
         if (res == 0 || paused) {
-            continue; // Si estÃ¡ pausado, no procesar paquetes
+            continue; // Si está pausado, no procesar paquetes
         }
 
-        // Verificar si el filtro ha cambiado
-        QString filtroActual;
-        QFile fileActual("./filtro.txt");
-        if (fileActual.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream in(&fileActual);
-
-            filtroActual = in.readAll();
-            fileActual.close();
+        // Agregar el paquete a la cola para procesamiento
+        {
+            std::lock_guard<std::mutex> lock(queueMutex);
+            paqueteQueue.push(std::make_pair(header, packet));
         }
-
-        if (filtroActual != filtroArchivo) {
-            filtroArchivo = filtroActual;
-            // Reiniciar la captura con el nuevo filtro
-            pcap_close(handle);
-            handle = pcap_open_live(deviceName.toStdString().c_str(), BUFSIZ, 1, 1000, errbuf);
-            if (handle == nullptr) {
-                qDebug() << "Error al abrir el dispositivo:" << errbuf;
-                return;
-            }
-        }
-
-        // Verificar si hay un filtro en el archivo de texto
-        if (!filtroArchivo.isEmpty()) {
-            // Utilizar el filtro del archivo de texto
-            if (procesarFiltroArchivo(packet, filtroArchivo)) {
-                procesarPaquete(header, packet);
-            }
-        } else {
-            // No hay filtro, procesar todos los paquetes
-            procesarPaquete(header, packet);
-        }
+        queueCondition.notify_one(); // Notificar al hilo de procesamiento
     }
 
     if (res == -1) {
         qDebug() << "Error al capturar paquetes:" << pcap_geterr(handle);
     }
 
+    // Finalizar el hilo de procesamiento
+    running = false; // Indicar que el hilo de procesamiento debe finalizar
+    queueCondition.notify_all(); // Despertar al hilo de procesamiento si está esperando
+    processingThread.join(); // Esperar a que el hilo de procesamiento termine
+
     pcap_close(handle);
 }
 
+// Función para procesar paquetes en un hilo separado
+void capturarpaquetes::procesarPaquetes() {
+    while (running) {
+        std::unique_lock<std::mutex> lock(queueMutex);
+        queueCondition.wait(lock, [] { return !paqueteQueue.empty() || !running; });
+
+        while (!paqueteQueue.empty()) {
+            auto paquete = paqueteQueue.front();
+            paqueteQueue.pop();
+            lock.unlock(); // Desbloquear para permitir que se agreguen más paquetes
+
+            // Procesar el paquete
+            procesarPaquete(paquete.first, paquete.second);
+
+            lock.lock(); // Volver a bloquear
+        }
+    }
+}
 // Procesar el filtro del archivo de texto
 bool capturarpaquetes::procesarFiltroArchivo(const u_char *packet, const QString &filtro)
 {
@@ -363,7 +374,11 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
     QString sourceDeviceName = resolverNombreDispositivo(source);
     // Determinar el protocolo
     QString protocol;
+
     switch (ipHeader->ip_p) {
+    case IPPROTO_ICMP:
+        protocol = "ICMP";
+        break;
     case IPPROTO_TCP: {
         // Obtener el encabezado TCP
         const struct tcphdr *tcpHeader = (struct tcphdr *)(packet + sizeof(struct ether_header) + ipHeader->ip_hl * 4);
@@ -394,9 +409,7 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
         }
         break;
     }
-    case IPPROTO_ICMP:
-        protocol = "ICMP";
-        break;
+
     default:
         protocol = "Otro";
         break;
