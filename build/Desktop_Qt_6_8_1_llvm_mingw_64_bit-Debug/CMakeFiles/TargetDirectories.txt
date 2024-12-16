@@ -1,0 +1,5 @@
+C:/Users/carlo/Downloads/Redes/lloro/BadShark/build/Desktop_Qt_6_8_1_llvm_mingw_64_bit-Debug/CMakeFiles/Packet_sniffer_pro.dir
+C:/Users/carlo/Downloads/Redes/lloro/BadShark/build/Desktop_Qt_6_8_1_llvm_mingw_64_bit-Debug/CMakeFiles/edit_cache.dir
+C:/Users/carlo/Downloads/Redes/lloro/BadShark/build/Desktop_Qt_6_8_1_llvm_mingw_64_bit-Debug/CMakeFiles/rebuild_cache.dir
+C:/Users/carlo/Downloads/Redes/lloro/BadShark/build/Desktop_Qt_6_8_1_llvm_mingw_64_bit-Debug/CMakeFiles/Packet_sniffer_pro_autogen_timestamp_deps.dir
+C:/Users/carlo/Downloads/Redes/lloro/BadShark/build/Desktop_Qt_6_8_1_llvm_mingw_64_bit-Debug/CMakeFiles/Packet_sniffer_pro_autogen.dir

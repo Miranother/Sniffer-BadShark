@@ -1,0 +1,11 @@
+WAN Miniport (Network Monitor) | \Device\NPF_{6B22FB93-7DB9-4683-82AA-9CF1110EF4CB}
+WAN Miniport (IPv6) | \Device\NPF_{05CE2944-D950-4CBF-A934-F2F38902258C}
+WAN Miniport (IP) | \Device\NPF_{9C26DF20-4DCF-4E6A-B052-C1A1544DE6F6}
+Intel(R) Wi-Fi 6 AX201 160MHz | \Device\NPF_{1403CB4E-1179-4FEA-923D-C446EBBE73E5}
+Microsoft Wi-Fi Direct Virtual Adapter #2 | \Device\NPF_{B8BEDA7D-34E3-44AC-B644-79DDEAD743DF}
+Microsoft Wi-Fi Direct Virtual Adapter | \Device\NPF_{724B9600-6FC5-4A38-A775-1D63ABB6BC6B}
+VirtualBox Host-Only Ethernet Adapter | \Device\NPF_{341BC5D8-47B2-49A4-9CD5-F7CD95D65EF9}
+Adapter for loopback traffic capture | \Device\NPF_Loopback
+AnchorFree TAP-Windows Adapter V9 | \Device\NPF_{E132FE19-B982-4D88-B10F-B029ED3D3BC5}
+OpenVPN Data Channel Offload | \Device\NPF_{0FF06BDF-2E4B-48F6-BB71-0546C89987D0}
+TAP-Windows Adapter V9 for OpenVPN Connect | \Device\NPF_{9F84275D-6CA7-49BB-9A9E-96973FDBEB03}

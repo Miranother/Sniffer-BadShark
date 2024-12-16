@@ -1,0 +1,78 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.16"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "Paquet_sniffer_pro",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "Packet_sniffer_pro::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-Packet_sniffer_pro-Debug-bae316865b65f4b19f05.json",
+					"name" : "Packet_sniffer_pro",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "Packet_sniffer_pro_autogen::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-Packet_sniffer_pro_autogen-Debug-f29086c5589dd2962855.json",
+					"name" : "Packet_sniffer_pro_autogen",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "Packet_sniffer_pro_autogen_timestamp_deps::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-Packet_sniffer_pro_autogen_timestamp_deps-Debug-78903d5b4cf56797a3c2.json",
+					"name" : "Packet_sniffer_pro_autogen_timestamp_deps",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Users/carlo/Downloads/Redes/lloro/BadShark/build/Desktop_Qt_6_8_1_llvm_mingw_64_bit-Debug",
+		"source" : "C:/Users/carlo/Downloads/Redes/BadShark"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}
