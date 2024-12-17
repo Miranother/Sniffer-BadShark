@@ -9,6 +9,9 @@
 #include <QList>
 #include <QTextEdit>
 #include <QTime>
+#include <QMap>
+#include <QMutex>
+
 struct Paquete {
     int frameNumber; // Número de frame
     int frameLength; // Longitud del frame
@@ -72,6 +75,8 @@ public:
     ~capturarpaquetes();
     QString dominio;
 private:
+    static QMap<QString, QString> cache; // Caché para almacenar resultados
+    static QMutex cacheMutex;
     Ui::capturarpaquetes *ui;     // UI generada por Qt
     QTableWidget *tableWidget;    // Tabla para mostrar los paquetes capturados
     QPushButton *pauseButton;     // Botón de pausa/reanudar
@@ -93,7 +98,7 @@ private:
     bool procesarFiltroArchivo(const u_char *packet, const QString &filtro);
     bool procesarFiltroUsuario(const u_char *packet, const QString &filtro);
     void actualizarFiltro();
-    void agregarPaqueteATabla(const struct timeval &timestamp, const QString &source, const QString &destination, const QString &protocol, int size, const QString &elapsedTime, const QString &sourceDeviceName);
+    void agregarPaqueteATabla(const struct timeval &timestamp, const QString &source, const QString &destination, const QString &protocol, int size, const QString &elapsedTime);
     void procesarFiltro();
     void filtrarHost(const QString &host);
     bool validarDominio(const QString &dominio);
@@ -106,7 +111,10 @@ private:
     void guardarPaquetesEnCSV();
     void actualizarSeleccion();
     void guardarPaquetesEnXLSX();
-    QString resolverNombreDispositivo(const QString &ip);
+    // QString resolverNombreDispositivo(const QString &ip);
+    static void inicializarWinsock();
+    static void limpiarWinsock();
+    static QString resolverNombreDispositivo(const QString &ip);
 };
 
 #endif // CAPTURARPAQUETES_H

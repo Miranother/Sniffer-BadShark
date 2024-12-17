@@ -13,8 +13,7 @@
 #include <QLabel>
 #include <QDateTime>
 #include <ws2tcpip.h>
-#include "v1.h"  // Para la estructura ip (puede no estar disponible en Windows)
-
+#include "v1.h"
 
 #include <QTextEdit>
 #pragma comment(lib, "ws2_32.lib") // Necesario para funciones de red en Windows
@@ -46,22 +45,15 @@ struct ether_header {
 };
 
 struct tcphdr {
-    unsigned short th_sport; // Puerto de origen
-    unsigned short th_dport; // Puerto de destino
-    unsigned int th_seq;     // Secuencia
-    unsigned int th_ack;     // Acuse de recibo
-    unsigned char th_off:4;  // Longitud del encabezado
-    unsigned char th_flags:4; // Flags
-    unsigned short th_win;    // Ventana
-    unsigned short th_sum;    // Suma de verificación
-    unsigned short th_urp;    // Puerto urgente
-};
-
-struct udphdr {
-    unsigned short uh_sport; // Puerto de origen
-    unsigned short uh_dport; // Puerto de destino
-    unsigned short uh_ulen;   // Longitud
-    unsigned short uh_sum;    // Suma de verificación
+    u_short th_sport;   // Puerto de origen
+    u_short th_dport;   // Puerto de destino
+    u_int th_seq;       // Número de secuencia
+    u_int th_ack;       // Número de acuse de recibo
+    u_char th_offx2;    // Desplazamiento de datos
+    u_char th_flags;     // Flags TCP
+    u_short th_win;     // Tamaño de ventana
+    u_short th_sum;     // Checksum
+    u_short th_urp;     // Puntero urgente
 };
 // Función para convertir dirección MAC a cadena
 void ether_ntoa(const u_char *mac, char *buffer) {
@@ -85,8 +77,8 @@ capturarpaquetes::capturarpaquetes(QWidget *parent)
     setFixedSize(1080, 720);
     setWindowIcon(QIcon("./BadShark.png"));
     // Configurar el QTableWidget
-    tableWidget->setColumnCount(6);
-    tableWidget->setHorizontalHeaderLabels({"Tiempo", "IP Fuente", "IP Destino", "Protocolo", "Tamaño","Info"});
+    tableWidget->setColumnCount(5);
+    tableWidget->setHorizontalHeaderLabels({"Tiempo", "IP Fuente", "IP Destino", "Protocolo", "Tamaño"});
     tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
     tableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
     tableWidget->horizontalHeader()->setStretchLastSection(true);
@@ -117,7 +109,6 @@ capturarpaquetes::capturarpaquetes(QWidget *parent)
     QPushButton *saveButton = new QPushButton("Guardar CSV", this);
     saveButton->setFixedSize(80,30);
     connect(saveButton, &QPushButton::clicked, this, &capturarpaquetes::guardarPaquetesEnCSV);
-
     QHBoxLayout *topLayout = new QHBoxLayout();
     topLayout->addWidget(pauseButton);
     topLayout->addWidget(saveButton);
@@ -230,95 +221,84 @@ void capturarpaquetes::togglePause()
 }
 
 // Iniciar la captura de paquetes
-void capturarpaquetes::iniciarCaptura(const QString &deviceName) {
+void capturarpaquetes::iniciarCaptura(const QString &deviceName)
+{
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle;
 
     // Abrir el dispositivo para captura
-    handle = pcap_open_live(deviceName.toStdString().c_str(), 1048576, 1, 10, errbuf); // 1 MB
+    handle = pcap_open_live(deviceName.toStdString().c_str(), BUFSIZ, 1, 1000, errbuf);
     if (handle == nullptr) {
         qDebug() << "Error al abrir el dispositivo:" << errbuf;
         return;
     }
-
+    // Solo establecer startTime si es la primera vez que se inicia la captura
+    if (startTime.isNull()) {
+        startTime = QTime::currentTime();
+    }
     startTime = QTime::currentTime();
     qDebug() << "Capturando paquetes en el dispositivo:" << deviceName;
+
+    // Leer el filtro del archivo de texto
+    QString filtroArchivo;
+    QFile file("./filtro.txt");
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&file);
+
+        filtroArchivo = in.readAll();
+        file.close();
+    }
 
     struct pcap_pkthdr *header;
     const u_char *packet;
     int res;
 
-    // Hilo para procesar paquetes
-    std::thread processingThread(procesarPaquetes);
-
-    // Leer el filtro del archivo de texto al inicio
-    QString filtroArchivo;
-    QFile file("./filtro.txt");
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&file);
-        filtroArchivo = in.readAll();
-        file.close();
-    }
-
-    // Establecer el filtro inicial si existe
-    struct bpf_program fp;
-    if (!filtroArchivo.isEmpty()) {
-        if (pcap_compile(handle, &fp, filtroArchivo.toStdString().c_str(), 0, PCAP_NETMASK_UNKNOWN) == -1) {
-            qDebug() << "Error al compilar el filtro:" << pcap_geterr(handle);
-            pcap_close(handle);
-            return;
-        }
-        if (pcap_setfilter(handle, &fp) == -1) {
-            qDebug() << "Error al establecer el filtro:" << pcap_geterr(handle);
-            pcap_close(handle);
-            return;
-        }
-    }
-
     // Captura en bucle
     while ((res = pcap_next_ex(handle, &header, &packet)) >= 0) {
         if (res == 0 || paused) {
-            continue; // Si está pausado, no procesar paquetes
+            continue; // Si estÃ¡ pausado, no procesar paquetes
         }
 
-        // Agregar el paquete a la cola para procesamiento
-        {
-            std::lock_guard<std::mutex> lock(queueMutex);
-            paqueteQueue.push(std::make_pair(header, packet));
+        // Verificar si el filtro ha cambiado
+        QString filtroActual;
+        QFile fileActual("./filtro.txt");
+        if (fileActual.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream in(&fileActual);
+
+            filtroActual = in.readAll();
+            fileActual.close();
         }
-        queueCondition.notify_one(); // Notificar al hilo de procesamiento
+
+        if (filtroActual != filtroArchivo) {
+            filtroArchivo = filtroActual;
+            // Reiniciar la captura con el nuevo filtro
+            pcap_close(handle);
+            handle = pcap_open_live(deviceName.toStdString().c_str(), BUFSIZ, 1, 1000, errbuf);
+            if (handle == nullptr) {
+                qDebug() << "Error al abrir el dispositivo:" << errbuf;
+                return;
+            }
+        }
+
+        // Verificar si hay un filtro en el archivo de texto
+        if (!filtroArchivo.isEmpty()) {
+            // Utilizar el filtro del archivo de texto
+            if (procesarFiltroArchivo(packet, filtroArchivo)) {
+                procesarPaquete(header, packet);
+            }
+        } else {
+            // No hay filtro, procesar todos los paquetes
+            procesarPaquete(header, packet);
+        }
     }
 
     if (res == -1) {
         qDebug() << "Error al capturar paquetes:" << pcap_geterr(handle);
     }
 
-    // Finalizar el hilo de procesamiento
-    running = false; // Indicar que el hilo de procesamiento debe finalizar
-    queueCondition.notify_all(); // Despertar al hilo de procesamiento si está esperando
-    processingThread.join(); // Esperar a que el hilo de procesamiento termine
-
     pcap_close(handle);
 }
 
-// Función para procesar paquetes en un hilo separado
-void capturarpaquetes::procesarPaquetes() {
-    while (running) {
-        std::unique_lock<std::mutex> lock(queueMutex);
-        queueCondition.wait(lock, [] { return !paqueteQueue.empty() || !running; });
-
-        while (!paqueteQueue.empty()) {
-            auto paquete = paqueteQueue.front();
-            paqueteQueue.pop();
-            lock.unlock(); // Desbloquear para permitir que se agreguen más paquetes
-
-            // Procesar el paquete
-            procesarPaquete(paquete.first, paquete.second);
-
-            lock.lock(); // Volver a bloquear
-        }
-    }
-}
 // Procesar el filtro del archivo de texto
 bool capturarpaquetes::procesarFiltroArchivo(const u_char *packet, const QString &filtro)
 {
@@ -352,8 +332,20 @@ bool capturarpaquetes::procesarFiltroArchivo(const u_char *packet, const QString
         return true;
     } else if (filtro.toLower().contains("tcp") && protocol == "TCP") {
         return true;
-    } else if (filtro.toLower().contains("host:") && (source.contains(filtro.mid(5).trimmed()) || destination.contains(filtro.mid(5).trimmed()))) {
-        return true;
+    } else if (filtro.toLower().contains("src:") && source.contains(filtro.mid(4).trimmed())) {
+        return true; // Filtro por IP fuente
+    } else if (filtro.toLower().contains("dst:") && destination.contains(filtro.mid(4).trimmed())) {
+        return true; // Filtro por IP destino
+    } else if (filtro.toLower().contains("srcport:")) {
+        const struct tcphdr *tcpHeader = (struct tcphdr *)(packet + sizeof(struct ether_header) + ipHeader->ip_hl * 4);
+        if (QString::number(ntohs(tcpHeader->th_sport)) == filtro.mid(9).trimmed()) {
+            return true; // Filtro por puerto fuente
+        }
+    } else if (filtro.toLower().contains("dstport:")) {
+        const struct tcphdr *tcpHeader = (struct tcphdr *)(packet + sizeof(struct ether_header) + ipHeader->ip_hl * 4);
+        if (QString::number(ntohs(tcpHeader->th_dport)) == filtro.mid(9).trimmed()) {
+            return true; // Filtro por puerto destino
+        }
     }
 
     return false;
@@ -370,51 +362,23 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
     // Convertir direcciones IP
     QString source = QString::fromLatin1(inet_ntoa(ipHeader->ip_src));
     QString destination = QString::fromLatin1(inet_ntoa(ipHeader->ip_dst));
-    // Resolver el nombre del dispositivo de origen
-    QString sourceDeviceName = resolverNombreDispositivo(source);
+
     // Determinar el protocolo
     QString protocol;
-
     switch (ipHeader->ip_p) {
+    case IPPROTO_TCP:
+        protocol = "TCP";
+        break;
+    case IPPROTO_UDP:
+        protocol = "UDP";
+        break;
     case IPPROTO_ICMP:
         protocol = "ICMP";
         break;
-    case IPPROTO_TCP: {
-        // Obtener el encabezado TCP
-        const struct tcphdr *tcpHeader = (struct tcphdr *)(packet + sizeof(struct ether_header) + ipHeader->ip_hl * 4);
-        // Verificar si es TLSv1.3
-        if (ntohs(tcpHeader->th_dport) == 443 || ntohs(tcpHeader->th_sport) == 443) {
-            protocol = "TLSv1.3";
-        } else {
-            protocol = "TCP";
-        }
-        break;
-    }
-    case IPPROTO_UDP: {
-        // Obtener el encabezado UDP
-        const struct udphdr *udpHeader = (struct udphdr *)(packet + sizeof(struct ether_header) + ipHeader->ip_hl * 4);
-        // Verificar si es mDNS
-        if (ntohs(udpHeader->uh_dport) == 5353 || ntohs(udpHeader->uh_sport) == 5353) {
-            protocol = "mDNS";
-        }
-        // Verificar si es SSDP
-        else if (ntohs(udpHeader->uh_dport) == 1900 || ntohs(udpHeader->uh_sport) == 1900) {
-            protocol = "SSDP";
-        }
-        // Verificar si es QUIC
-        else if (ntohs(udpHeader->uh_dport) == 443 || ntohs(udpHeader->uh_sport) == 443) {
-            protocol = "QUIC";
-        } else {
-            protocol = "UDP";
-        }
-        break;
-    }
-
     default:
         protocol = "Otro";
         break;
     }
-
 
     // Obtener el tamaño del paquete
     int packetSize = header->len;
@@ -424,8 +388,6 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
     paquete.frameNumber = tableWidget->rowCount() + 1; // Número de frame
     paquete.frameLength = packetSize; // Longitud del frame
     paquete.interfaceName = deviceName; // Cambia esto según tu lógica
-    paquete.sourceDeviceName = sourceDeviceName; // Almacenar el nombre del dispositivo de origen
-
     // Calcular el tiempo transcurrido desde el inicio de la captura
     int elapsedMilliseconds = startTime.msecsTo(QTime::currentTime());
     int elapsedSeconds = elapsedMilliseconds / 1000; // Convertir a segundos
@@ -487,12 +449,13 @@ void capturarpaquetes::procesarPaquete(const struct pcap_pkthdr *header, const u
     }
 
     // Agregar el paquete a la tabla
-    agregarPaqueteATabla(header->ts, source, destination, protocol, packetSize,paquete.elapsedTime,paquete.sourceDeviceName);
+    agregarPaqueteATabla(header->ts, source, destination, protocol, packetSize,paquete.elapsedTime);
     // Agregar el paquete a la lista de paquetes capturados
     paquetesCapturados.append(paquete);
 }
 // Agregar un paquete a la tabla
-void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, const QString &source, const QString &destination, const QString &protocol, int size, const QString &elapsedTime, const QString &sourceDeviceName) {
+void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, const QString &source, const QString &destination, const QString &protocol, int size,const QString &elapsedTime)
+{
     // Convertir el tiempo a un formato legible
     QString timeString = QString("%1.%2").arg(timestamp.tv_sec).arg(timestamp.tv_usec, 6, 10, QChar('0'));
 
@@ -506,7 +469,6 @@ void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, con
     QTableWidgetItem *destinationItem = new QTableWidgetItem(destination);
     QTableWidgetItem *protocolItem = new QTableWidgetItem(protocol);
     QTableWidgetItem *sizeItem = new QTableWidgetItem(QString::number(size));
-    QTableWidgetItem *deviceItem = new QTableWidgetItem(sourceDeviceName); // Nuevo elemento para el nombre del dispositivo
 
     // Determinar el color de fondo opaco basado en el protocolo
     QColor backgroundColor;
@@ -516,31 +478,22 @@ void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, con
         backgroundColor = QColor(144, 238, 144, 100); // Verde claro opaco
     } else if (protocol == "ICMP") {
         backgroundColor = QColor(255, 255, 102, 100); // Amarillo claro opaco
-    } else if (protocol == "TLSv1.3") {
-        backgroundColor = QColor(0, 204, 204, 100); // Azul oscuro opaco
-    } else if (protocol == "mDNS") {
-        backgroundColor = QColor(255, 165, 0, 100); // Naranja opaco
-    } else if (protocol == "SSDP") {
-        backgroundColor = QColor(255, 192, 203, 100); // Rosa opaco
-    } else if (protocol == "QUIC") {
-        backgroundColor = QColor(230, 230, 250, 100); // Violeta opaco
     } else {
         backgroundColor = QColor(211, 211, 211, 100); // Gris claro opaco para otros
     }
+
     // Aplicar el color de fondo y mantener texto oscuro
     timeItem->setBackground(backgroundColor);
     sourceItem->setBackground(backgroundColor);
     destinationItem->setBackground(backgroundColor);
     protocolItem->setBackground(backgroundColor);
     sizeItem->setBackground(backgroundColor);
-    deviceItem->setBackground(backgroundColor); // Color de fondo para el nombre del dispositivo
 
     timeItem->setForeground(Qt::black);
     sourceItem->setForeground(Qt::black);
     destinationItem->setForeground(Qt::black);
     protocolItem->setForeground(Qt::black);
     sizeItem->setForeground(Qt::black);
-    deviceItem->setForeground(Qt::black); // Texto normal para el nombre del dispositivo
 
     // Agregar los elementos a la tabla
     tableWidget->setItem(rowCount, 0, timeItem);
@@ -548,8 +501,8 @@ void capturarpaquetes::agregarPaqueteATabla(const struct timeval &timestamp, con
     tableWidget->setItem(rowCount, 2, destinationItem);
     tableWidget->setItem(rowCount, 3, protocolItem);
     tableWidget->setItem(rowCount, 4, sizeItem);
-    tableWidget->setItem(rowCount, 5, deviceItem); // Agregar el nombre del dispositivo a la tabla
 }
+
 void capturarpaquetes::actualizarSeleccion()
 {
     // Iterar sobre todas las filas
@@ -573,6 +526,45 @@ void capturarpaquetes::actualizarSeleccion()
 
 
 
+// Procesar el filtro ingresado por el usuario
+bool capturarpaquetes::procesarFiltroUsuario(const u_char *packet, const QString &filtro)
+{
+    const struct ip *ipHeader = (struct ip *)(packet + 14); // Salta el encabezado Ethernet
+
+    // Convertir direcciones IP
+    QString source = QString::fromLatin1(inet_ntoa(ipHeader->ip_src));
+    QString destination = QString::fromLatin1(inet_ntoa(ipHeader->ip_dst));
+
+    // Determinar el protocolo
+    QString protocol;
+    switch (ipHeader->ip_p) {
+    case IPPROTO_TCP:
+        protocol = "TCP";
+        break;
+    case IPPROTO_UDP:
+        protocol = "UDP";
+        break;
+    case IPPROTO_ICMP:
+        protocol = "ICMP";
+        break;
+    default:
+        protocol = "Otro";
+        break;
+    }
+
+    // Verificar si el paquete coincide con el filtro
+    if (filtro.toLower().contains("icmp") && protocol == "ICMP") {
+        return true;
+    } else if (filtro.toLower().contains("udp") && protocol == "UDP") {
+        return true;
+    } else if (filtro.toLower().contains("tcp") && protocol == "TCP") {
+        return true;
+    } else if (filtro.toLower().contains("host:") && (source.contains(filtro.mid(5).trimmed()) || destination.contains(filtro.mid(5).trimmed()))) {
+        return true;
+    }
+
+    return false;
+}
 
 void capturarpaquetes::actualizarFiltro()
 {
@@ -581,7 +573,6 @@ void capturarpaquetes::actualizarFiltro()
         connect(lineEditFiltro, &QLineEdit::returnPressed, this, &capturarpaquetes::procesarFiltro);
     }
 }
-
 
 void capturarpaquetes::procesarFiltro()
 {
@@ -610,19 +601,65 @@ void capturarpaquetes::procesarFiltro()
             return;
         }
 
-        // Validar el texto ingresado
-        if      (textoFiltro.toLower().contains("icmp") ||
-                textoFiltro.toLower().contains("udp") ||
-                textoFiltro.toLower().contains("tcp") ||
-                textoFiltro.toLower().contains("tlsv1.3") ||
-                textoFiltro.toLower().contains("mdns") ||
-                textoFiltro.toLower().contains("ssdp") ||
-                textoFiltro.toLower().contains("quic")) {
-            // Guardar el texto valido en el archivo
+        // Validar el texto ingresado para los nuevos filtros
+        if (textoFiltro.toLower().startsWith("src:")) {
+            // Filtro por IP fuente
+            QString ipFuente = textoFiltro.mid(4).trimmed();
             QFile file("./filtro.txt");
             if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
                 QTextStream out(&file);
-                out << textoFiltro << "\n";
+                out << "src: " << ipFuente << "\n"; // Guarda el filtro de IP fuente
+                file.close();
+                qDebug() << "Filtro guardado en filtro.txt";
+                QMessageBox::information(this, "Filtro guardado", "Haz seleccionado: " + textoFiltro);
+            } else {
+                qDebug() << "Error al abrir el archivo para escribir.";
+            }
+        } else if (textoFiltro.toLower().startsWith("dst:")) {
+            // Filtro por IP destino
+            QString ipDestino = textoFiltro.mid(4).trimmed();
+            QFile file("./filtro.txt");
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&file);
+                out << "dst: " << ipDestino << "\n"; // Guarda el filtro de IP destino
+                file.close();
+                qDebug() << "Filtro guardado en filtro.txt";
+                QMessageBox::information(this, "Filtro guardado", "Haz seleccionado: " + textoFiltro);
+            } else {
+                qDebug() << "Error al abrir el archivo para escribir.";
+            }
+        } else if (textoFiltro.toLower().startsWith("srcport:")) {
+            // Filtro por puerto fuente
+            QString puertoFuente = textoFiltro.mid(9).trimmed();
+            QFile file("./filtro.txt");
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&file);
+                out << "srcport: " << puertoFuente << "\n"; // Guarda el filtro de puerto fuente
+                file.close();
+                qDebug() << "Filtro guardado en filtro.txt";
+                QMessageBox::information(this, "Filtro guardado", "Haz seleccionado: " + textoFiltro);
+            } else {
+                qDebug() << "Error al abrir el archivo para escribir.";
+            }
+        } else if (textoFiltro.toLower().startsWith("dstport:")) {
+            // Filtro por puerto destino
+            QString puertoDestino = textoFiltro.mid(9).trimmed();
+            QFile file("./filtro.txt");
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&file);
+                out << "dstport: " << puertoDestino << "\n"; // Guarda el filtro de puerto destino
+                file.close();
+                qDebug() << "Filtro guardado en filtro.txt";
+                QMessageBox::information(this, "Filtro guardado", "Haz seleccionado: " + textoFiltro);
+            } else {
+                qDebug() << "Error al abrir el archivo para escribir.";
+            }
+        } else if (textoFiltro.toLower().contains("icmp") || textoFiltro.toLower().contains("udp") || textoFiltro.toLower().contains("tcp")) {
+            // Filtro por protocolo
+            QFile file("./filtro.txt");
+            if (file.open(QIODevice::WriteOnly | QIODevice:: Text)) {
+                QTextStream out(&file);
+                out << textoFiltro << "\n"; // Guarda el filtro de protocolo
                 file.close();
                 qDebug() << "Filtro guardado en filtro.txt";
                 QMessageBox::information(this, "Filtro guardado", "Haz seleccionado: " + textoFiltro);
@@ -630,34 +667,28 @@ void capturarpaquetes::procesarFiltro()
                 qDebug() << "Error al abrir el archivo para escribir.";
             }
         } else if (textoFiltro.toLower().startsWith("host:")) {
-            // Validar el texto ingresado
-            if (textoFiltro.toLower().startsWith("host:")) {
-                QString dominio = textoFiltro.mid(5).trimmed(); // Extrae el dominio del filtro y elimina espacios
-                QString ipAddress = resolverDominio(dominio); // Resuelve el dominio a IP
-                if (!ipAddress.isEmpty()) {
-                    // Guardar el filtro como dirección IP
-                    QFile file("./filtro.txt");
-                    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                        QTextStream out(&file);
-                        out << "host: " << ipAddress << "\n"; // Guarda el filtro como IP
-                        file.close();
-                        qDebug() << "Filtro guardado en filtro.txt";
-                        QMessageBox::information(this, "Filtro guardado", "Haz seleccionado: " + dominio);
-                    } else {
-                        qDebug() << "Error al abrir el archivo para escribir.";
-                    }
+            // Validar el texto ingresado para dominios
+            QString dominio = textoFiltro.mid(5).trimmed(); // Extrae el dominio del filtro y elimina espacios
+            QString ipAddress = resolverDominio(dominio); // Resuelve el dominio a IP
+            if (!ipAddress.isEmpty()) {
+                // Guardar el filtro como dirección IP
+                QFile file("./filtro.txt");
+                if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    QTextStream out(&file);
+                    out << "host: " << ipAddress << "\n"; // Guarda el filtro como IP
+                    file.close();
+                    qDebug() << "Filtro guardado en filtro.txt";
+                    QMessageBox::information(this, "Filtro guardado", "Haz seleccionado: " + dominio);
                 } else {
-                    // Dominio no existe, mostrar mensaje de error
-                    QMessageBox::critical(this, "Error", "El dominio " + dominio + " no se pudo resolver.");
-                    lineEditFiltro->clear(); // Limpiar el QLineEdit
+                    qDebug() << "Error al abrir el archivo para escribir.";
                 }
             } else {
                 // Dominio no existe, mostrar mensaje de error
-                QMessageBox::critical(this, "Error", "El dominio " + dominio + " no existe.");
+                QMessageBox::critical(this, "Error", "El dominio " + dominio + " no se pudo resolver.");
                 lineEditFiltro->clear(); // Limpiar el QLineEdit
             }
         } else {
-            QMessageBox::warning(this, "Filtro no valido", "El filtro ingresado no es valido. Por favor, ingrese un filtro que contenga ICMP, UDP, TCP o host: (dominio), TLSV1.3,MDNS,SSDP,QUIC,none(quitar filtro)");
+            QMessageBox::warning(this, "Filtro no válido", "El filtro ingresado no es válido. Por favor, ingrese un filtro que contenga ICMP, UDP, TCP, src:, dst:, srcport:, dstport: o host:");
             lineEditFiltro->clear(); // Limpiar el QLineEdit
             return;
         }
@@ -672,43 +703,39 @@ void capturarpaquetes::procesarFiltro()
     });
     captura.detach();
 }
+bool capturarpaquetes::validarDominio(const QString &dominio)
+{
+    WSADATA wsaData;
+    int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (iResult != 0) {
+        QMessageBox::critical(this, "Error", "No se pudo inicializar Winsock.");
+        return false;
+    }
+    struct hostent *he = gethostbyname(dominio.toStdString().c_str());
+    WSACleanup();
+    return he != NULL;
+}
+
 QString capturarpaquetes::resolverDominio(const QString &dominio) {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        return QString("Error al inicializar Winsock");
+        return QString(); // Error al inicializar Winsock
     }
 
-    struct addrinfo hints, *res;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET; // IPv4
-    hints.ai_socktype = SOCK_STREAM; // TCP
+    struct hostent *he = gethostbyname(dominio.toStdString().c_str());
+    WSACleanup();
 
-    // Llamar a getaddrinfo
-    int status = getaddrinfo(dominio.toStdString().c_str(), NULL, &hints, &res);
-    if (status != 0) {
-        WSACleanup(); // Limpiar Winsock
-        return QString("Error al resolver el dominio: ") + QString(gai_strerror(status));
+    if (he == nullptr) {
+        return QString(); // No se pudo resolver el dominio
     }
 
     // Convertir la dirección IP a un QString
-    char ipstr[INET_ADDRSTRLEN];
-    QString lastIpAddress; // Para almacenar la última dirección IP encontrada
-
-    for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
-        void *addr = &((struct sockaddr_in *)p->ai_addr)->sin_addr;
-        inet_ntop(p->ai_family, addr, ipstr, sizeof(ipstr));
-        lastIpAddress = QString(ipstr); // Actualizar con la última dirección IP
-    }
-
-    freeaddrinfo(res); // Liberar la memoria
-    WSACleanup(); // Limpiar Winsock
-
-    if (lastIpAddress.isEmpty()) {
-        return QString("No se pudo resolver el dominio");
-    }
-
-    return lastIpAddress; // Devuelve la última dirección IP como QString
+    struct in_addr addr;
+    memcpy(&addr, he->h_addr_list[0], sizeof(struct in_addr));
+    return QString(inet_ntoa(addr)); // Devuelve la dirección IP como QString
 }
+
+
 void capturarpaquetes::guardarPaqueteEnArchivo(const Paquete &paquete)
 {
     QFile file("paquete_actual.txt"); // Cambia el nombre del archivo si es necesario
@@ -719,7 +746,6 @@ void capturarpaquetes::guardarPaqueteEnArchivo(const Paquete &paquete)
         out << "Número de frame: " << paquete.frameNumber << "\n";
         out << "Longitud del frame: " << paquete.frameLength << "\n";
         out << "Nombre de la interfaz: " << paquete.interfaceName << "\n";
-        out << "De donde proviene el paquete: " << paquete.sourceDeviceName << "\n";
         out << "Hora de llegada: " << paquete.arrivalTime << "\n";
         out << "Hora de llegada en formato epoch: " << paquete.epochArrivalTime << "\n";
         out << "Tipo de encapsulación: " << paquete.encapsulationType << "\n";
@@ -825,7 +851,7 @@ void capturarpaquetes::guardarPaquetesEnCSV() {
         QTextStream out(&file);
 
         // Escribir encabezados
-        out << "Paquete,Tiempo,IP Fuente,IP Destino,Protocolo,Tam,Info\n";
+        out << "Paquete,Tiempo,IP Fuente,IP Destino,Protocolo,Tam\n";
 
         // Escribir cada paquete capturado
         for (const Paquete &paquete : paquetesCapturados) {
@@ -835,8 +861,7 @@ void capturarpaquetes::guardarPaquetesEnCSV() {
                 << paquete.srcIP << ","       // IP Fuente
                 << paquete.dstIP << ","       // IP Destino
                 << paquete.protocol << ","     // Protocolo
-                << paquete.frameLength << "," // Tamaño
-                << paquete.sourceDeviceName <<"\n";
+                << paquete.frameLength << "\n"; // Tamaño
         }
 
         file.close();
@@ -879,32 +904,4 @@ void capturarpaquetes::guardarPaquetesEnCSV() {
         qDebug() << "Error al abrir el archivo para escribir.";
         QMessageBox::critical(this, "Error", "No se pudo guardar el archivo CSV.");
     }
-}
-
-
-
-QString capturarpaquetes::resolverNombreDispositivo(const QString &ip) {
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        return QString("Error al inicializar Winsock");
-    }
-
-    struct sockaddr_in sa;
-    sa.sin_family = AF_INET;
-
-    // Convertir la dirección IP de QString a in_addr
-    if (inet_pton(AF_INET, ip.toStdString().c_str(), &sa.sin_addr) <= 0) {
-        WSACleanup();
-        return QString("Dirección IP no válida");
-    }
-
-    // Usar gethostbyaddr para obtener el nombre del host
-    struct hostent *he = gethostbyaddr((const char *)&sa.sin_addr, sizeof(sa.sin_addr), AF_INET);
-    if (he != nullptr) {
-        WSACleanup(); // Limpiar Winsock
-        return QString::fromLatin1(he->h_name); // Devuelve el nombre del host
-    }
-
-    WSACleanup(); // Limpiar Winsock
-    return QString("Desconocido"); // Si no se pudo resolver, devuelve "Desconocido"
 }
